@@ -1,12 +1,8 @@
 #include "libDisk.h"
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#define MAX_DISKS 100 
-#define BLOCKSIZE 256
 
 typedef struct {
     int fd;
@@ -18,9 +14,24 @@ typedef struct {
 Disk diskList[MAX_DISKS];
 int diskCounter = 0;
 
+// Initializes all diskList entries
+void initDiskList() {
+     for (int i = 0; i < MAX_DISKS; i++) {
+        diskList[i].fd = -1;
+        diskList[i].filename = NULL;
+    }
+}
+
 int openDisk(char *filename, int nBytes) {
     int diskSize;
     
+    // Invalid nBytes passed
+    if (nBytes < BLOCKSIZE) return -1;
+
+    // Check if list has space
+    if (diskCounter >= MAX_DISKS) return -1;    
+
+
     // Open existing disk, don't overwrite
     if (nBytes == 0) {
         int diskCount = sizeof(diskList)/sizeof(Disk);
@@ -29,18 +40,30 @@ int openDisk(char *filename, int nBytes) {
                  return diskList[i].diskNum;
             }
         }
-        // No existing disk open
-        return -1;
+
+        // No existing disk open, open from file without overwriting (new fd)
+        int fd = open(filename, O_RDWR);
+        if (fd < 0) {
+            return -1;
+        }
+        // Repositions file pointer to end of file and returns the size of file in bytes
+        off_t size = lseek(fd, 0, SEEK_END);
+        if (size < BLOCKSIZE) {
+            close(fd);
+            return -1;
+        }
+
+        // Update the existing disk entry in diskList
+        diskList[diskCounter].fd = fd;
+        diskList[diskCounter].diskNum = diskCounter;
+        diskList[diskCounter].diskSize = (int)size;
+        diskList[diskCounter].filename = strdup(filename);
+        diskCounter++;
+        return (diskCounter - 1);
     }
 
-    // Invalid nBytes passed
-    if (nBytes < BLOCKSIZE) return -1;
-
-    // Check if list has space
-    if (diskCounter >= MAX_DISKS) return -1;
-
     // Make disk size a factor of block size
-    diskSize = (int)floor(nBytes / BLOCKSIZE) * BLOCKSIZE;    
+    diskSize = (int)(nBytes / BLOCKSIZE) * BLOCKSIZE;    
 
     // Create UNIX file   
     int fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -53,7 +76,7 @@ int openDisk(char *filename, int nBytes) {
     diskList[diskCounter].fd = fd;
     diskList[diskCounter].diskNum = diskCounter;
     diskList[diskCounter].diskSize = diskSize;
-    diskList[diskCounter].filename = filename; 
+    diskList[diskCounter].filename = strdup(filename); 
     diskCounter++;
     
     return (diskCounter - 1);
@@ -70,15 +93,47 @@ int closeDisk(int disk) {
     close(diskList[disk].fd);
     diskList[disk].fd = -1;
     diskList[disk].diskSize = 0;
+    free(diskList.filename);
     diskList[disk].filename = NULL;
     return 0;
 }
 
 
 int readBlock(int disk, int bNum, void *block) {
+    // Input validation on passed in disk
+    if (disk < 0 || disk >= MAX_DISKS) return -1;
+    // If disk is closed
+    if (diskList[disk].fd == -1) return -1;
+    if (block == NULL) return -1;
+    // Input validation on passed in block
+    if (bNum < 0 || bNum >= diskList[disk].diskSize / BLOCKSIZE) return -1;
+    
+    // Reposition file pointer by offset
+    off_t offset = (off_t) bNum * BLOCKSIZE;
+    int fd = diskList[disk].fd;
+    if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+
+    // Successful read
+    if (read(fd, block, BLOCKSIZE) != BLOCKSIZE) return -1;
+    return 0;
 
 }
 
 int writeBlock(int disk, int bNum, void *block) {
+    // Input validation on passed in disk
+    if (disk < 0 || disk >= MAX_DISKS) return -1;
+    // If disk is closed
+    if (diskList[disk].fd == -1) return -1;
+    if (block == NULL) return -1;
+    // Input validation on passed in block
+    if (bNum < 0 || bNum >= diskList[disk].diskSize / BLOCKSIZE) return -1;
 
+    // Reposition file pointer by offset
+    off_t offset = (off_t) bNum * BLOCKSIZE;
+    int fd = diskList[disk].fd;
+    if (lseek(fd, offset, SEEK_SET) < 0) return -1;
+    
+    // Successful write
+    if (write(fd, block, BLOCKSIZE) != BLOCKSIZE) return -1;
+    return 0;
 }
