@@ -25,22 +25,22 @@ int openDisk(char *filename, int nBytes) {
     if (nBytes == 0) {
         int diskCount = sizeof(diskList)/sizeof(Disk);
         for (int i = 0; i < diskCount ; i++) {
-            if (strcmp(diskList[i].filename, filename) == 0) return diskList[i].diskNum;
+            if (diskList[i].filename != NULL && strcmp(diskList[i].filename, filename) == 0) {
+                 return diskList[i].diskNum;
+            }
         }
         // No existing disk open
         return -1;
     }
 
-    if (nBytes < BLOCKSIZE) {
-        return -1;
-    }
+    // Invalid nBytes passed
+    if (nBytes < BLOCKSIZE) return -1;
+
+    // Check if list has space
+    if (diskCounter >= MAX_DISKS) return -1;
 
     // Make disk size a factor of block size
-    if (nBytes % BLOCKSIZE != 0) {
-        diskSize = (int)floor(nBytes / BLOCKSIZE) * BLOCKSIZE; 
-    } else {
-        diskSize = nBytes;
-    }    
+    diskSize = (int)floor(nBytes / BLOCKSIZE) * BLOCKSIZE;    
 
     // Create UNIX file   
     int fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -49,8 +49,6 @@ int openDisk(char *filename, int nBytes) {
         return -1;
     }
 
-    // Check if list has space
-
     // Create new disk
     diskList[diskCounter].fd = fd;
     diskList[diskCounter].diskNum = diskCounter;
@@ -58,12 +56,24 @@ int openDisk(char *filename, int nBytes) {
     diskList[diskCounter].filename = filename; 
     diskCounter++;
     
-    return diskList[diskCounter].diskNum;
+    return (diskCounter - 1);
 }
 
+// Returns 0 on successful disk closure, -1 on failure
 int closeDisk(int disk) {
+    // Invalid disk passed in
+    if (disk < 0 || disk >= MAX_DISKS) return -1;
+    // If disk is already closed
+    if (diskList[disk].fd == -1) return -1;
 
+    // Close file descriptor and update disklist
+    close(diskList[disk].fd);
+    diskList[disk].fd = -1;
+    diskList[disk].diskSize = 0;
+    diskList[disk].filename = NULL;
+    return 0;
 }
+
 
 int readBlock(int disk, int bNum, void *block) {
 
