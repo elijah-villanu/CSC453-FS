@@ -3,7 +3,15 @@
 #include "libDisk.h"
 
 
-int tfs_mkfs(char *filename, int nBytes);
+int tfs_mkfs(char *filename, int nBytes) {
+    int diskNum = openDisk(filename, nBytes);
+
+    if (diskNum < 0) {
+        return ERR_DISK_OPEN;
+    }
+
+    // TODO
+}
 
 
 int tfs_mount(char *diskname);
