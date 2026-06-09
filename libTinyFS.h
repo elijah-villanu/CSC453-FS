@@ -21,7 +21,8 @@
 
 // Superblock specific layout
 #define SUPERBLOCK_ROOT_INODE_OFFSET 4 // Block number of root inode
-#define SUPERBLOCK_BITMAP_OFFSET 5 // Start of the free block bitmap
+#define SUPERBLOCK_NUM_BLOCKS_OFFSET 5 // Total number of blocks on disk
+#define SUPERBLOCK_BITMAP_OFFSET 6 // Start of the free block bitmap
 
 // Inode specific layout
 #define INODE_FIRST_EXTENT 2 // First extent block num

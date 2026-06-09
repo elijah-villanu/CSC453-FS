@@ -14,5 +14,6 @@
 #define ERR_NO_FREE_BLOCKS -10 // Disk full
 #define ERR_BLOCK_WRITE -11 // writeBlock failed
 #define ERR_DISK_ALREADY_MOUNTED -12 // A disk is already mounted
-
+#define ERR_FILE_TABLE_FULL -13 // OpenFileTable is full (unless we dynamically allocate)
+#define ERR_BLOCK_OUT_OF_RANGE -14 // Requested block out of range
 #endif
