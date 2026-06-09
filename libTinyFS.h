@@ -33,7 +33,7 @@
 #define EXTENT_DATA_OFFSET 4 // Start of file extent data
 #define EXTENT_DATA_SIZE (BLOCKSIZE - DATA_START_OFFSET) // Data bytes available after default bytes set (252)
 
-#define MAX_FILES 100;// Max amount of files stored in a disk
+#define MAX_FILES 100 // Max amount of files stored in a disk
 
 // Representing an entry in open file table
 typedef struct {

@@ -12,5 +12,7 @@
 #define ERR_INVALID_FS -8 // Not a valid FS in open FD table
 #define ERR_EOF -9 // readByte past EOF
 #define ERR_NO_FREE_BLOCKS -10 // Disk full
+#define ERR_BLOCK_WRITE -11 // writeBlock failed
+#define ERR_DISK_ALREADY_MOUNTED -12 // A disk is already mounted
 
 #endif

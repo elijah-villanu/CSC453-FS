@@ -25,13 +25,6 @@ void initDiskList() {
 int openDisk(char *filename, int nBytes) {
     int diskSize;
     
-    // Invalid nBytes passed
-    if (nBytes < BLOCKSIZE) return -1;
-
-    // Check if list has space
-    if (diskCounter >= MAX_DISKS) return -1;    
-
-
     // Open existing disk, don't overwrite
     if (nBytes == 0) {
         int diskCount = sizeof(diskList)/sizeof(Disk);
@@ -40,6 +33,9 @@ int openDisk(char *filename, int nBytes) {
                  return diskList[i].diskNum;
             }
         }
+
+        // Check if list has space
+        if (diskCounter >= MAX_DISKS) return -1;
 
         // No existing disk open, open from file without overwriting (new fd)
         int fd = open(filename, O_RDWR);
@@ -61,6 +57,12 @@ int openDisk(char *filename, int nBytes) {
         diskCounter++;
         return (diskCounter - 1);
     }
+
+    // Invalid nBytes passed (creating new disk requires at least BLOCKSIZE)
+    if (nBytes < BLOCKSIZE) return -1;
+
+    // Check if list has space
+    if (diskCounter >= MAX_DISKS) return -1;
 
     // Make disk size a factor of block size
     diskSize = (int)(nBytes / BLOCKSIZE) * BLOCKSIZE;    
@@ -93,7 +95,7 @@ int closeDisk(int disk) {
     close(diskList[disk].fd);
     diskList[disk].fd = -1;
     diskList[disk].diskSize = 0;
-    free(diskList.filename);
+    free(diskList[disk].filename);
     diskList[disk].filename = NULL;
     return 0;
 }

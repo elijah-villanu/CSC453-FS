@@ -110,7 +110,22 @@ int tfs_unmount(void) {
 fileDescriptor tfs_openFile(char *name);
 
 
-int tfs_closeFile(fileDescriptor FD);
+int tfs_closeFile(fileDescriptor FD) {
+    // Making sure a file system exists first
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Making sure file descriptor in correct range
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+
+    // TODO: May need to also free anything from openFile (if we end up doing any malloc)
+
+    // Clearing entry of provided file descriptor
+    openFileTable[FD].inUse = 0;
+    openFileTable[FD].inodeBlock = -1;
+    openFileTable[FD].filePointer = 0;
+    return TFS_SUCCESS;
+}
 
 
 int tfs_writeFile(fileDescriptor FD,char *buffer, int size);
@@ -122,5 +137,18 @@ int tfs_deleteFile(fileDescriptor FD);
 int tfs_readByte(fileDescriptor FD, char *buffer);
 
 
-int tfs_seek(fileDescriptor FD, int offset);
+int tfs_seek(fileDescriptor FD, int offset) {
+    // Making sure a file system exists first
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Making sure file descriptor in correct range
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    // Offset can't be negative 
+    if (offset < 0) return ERR_EOF;
+
+    // Set file pointer to provided offset
+    openFileTable[FD].filePointer = offset;
+    return TFS_SUCCESS;
+}
 
