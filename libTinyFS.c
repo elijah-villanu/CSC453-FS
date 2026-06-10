@@ -222,7 +222,6 @@ fileDescriptor tfs_openFile(char *name) {
         if (writeBlock(currentMount, inodeBlock, newInode) < 0) return ERR_BLOCK_WRITE;
         // Mark block as used in bitmap
         if (setBitmapBit(inodeBlock, 0) < 0) return ERR_BLOCK_WRITE;
-
     }
     
     // Update open file table
@@ -253,7 +252,7 @@ int tfs_closeFile(fileDescriptor FD) {
 }
 
 
-int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
+int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     // Making sure a file system exists first
     if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
     // Making sure file descriptor in correct range
@@ -263,7 +262,6 @@ int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
     if (buffer == NULL) return ERR_INVALID_PARAM;
     if (size < 0) return ERR_INVALID_PARAM;
     
-    /*
     // Read inode block
     char inode[BLOCKSIZE];
     int inodeBlock = openFileTable[FD].inodeBlock;
@@ -274,12 +272,73 @@ int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
     while (extentBlock != 0) {
         char extent[BLOCKSIZE];
         if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
-    
-    }
-    */
+ 
+        int nextExtent = (unsigned char)extent[FILE_EXTENT_NEXT];
 
-    // TODO: implement
-    return -1;
+        // Update bitmap
+        if (setBitmapBit(extentBlock, 1) < 0) return ERR_BLOCK_WRITE;
+    
+        // Update disk as free block
+        char freeBlock[BLOCKSIZE];
+        memset(freeBlock, 0x00, BLOCKSIZE);
+        freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
+        freeBlock[MAGIC_NUM_OFFSET]  = MAGIC_NUMBER;
+        if (writeBlock(currentMount, extentBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
+
+        extentBlock = nextExtent;
+    }
+
+    // Reset inode state
+    inode[INODE_FIRST_EXTENT] = 0;
+    inode[INODE_SIZE_OFFSET] = 0;
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+
+    // Write buffer to file extent blocks   
+    int bytesWritten = 0;
+    int prevExtentBlock = -1;
+
+    while (bytesWritten < size) {
+        // Find a free block for this extent
+        int newExtent = findFreeBlock();
+        if (newExtent < 0) return ERR_NO_FREE_BLOCKS;
+        // Mark new extent block as used in bitmap
+        if (setBitmapBit(newExtent, 0) < 0) return ERR_BLOCK_WRITE;
+
+        // Build file extent block
+        char extent[BLOCKSIZE];
+        memset(extent, 0x00, BLOCKSIZE);
+        extent[BLOCK_TYPE_OFFSET] = FILE_EXTENT;
+        extent[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+        extent[FILE_EXTENT_NEXT] = 0;
+
+        // Copy bytes from buffer that fit into a block
+        int bytesToCopy = size - bytesWritten;
+        if (bytesToCopy > EXTENT_DATA_SIZE) bytesToCopy = EXTENT_DATA_SIZE;
+        memcpy(&extent[EXTENT_DATA_OFFSET], buffer + bytesWritten, bytesToCopy);
+        bytesWritten += bytesToCopy;
+        if (writeBlock(currentMount, newExtent, extent) < 0) return ERR_BLOCK_WRITE;
+        
+        // If first file extent, update inode
+        if (prevExtentBlock == -1) {
+            inode[INODE_FIRST_EXTENT] = (char)newExtent;
+            if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+        } else {
+            char prevExtent[BLOCKSIZE];
+            if (readBlock(currentMount, prevExtentBlock, prevExtent) < 0) return ERR_DISK_READ;
+            // Need to get prev extent block to set next extent pointer to new extent
+            prevExtent[FILE_EXTENT_NEXT] = (char)newExtent;
+            if (writeBlock(currentMount, prevExtentBlock, prevExtent) < 0) return ERR_BLOCK_WRITE;
+        }
+        // Set this extent to prev for next iteration
+        prevExtentBlock = newExtent;   
+    }
+
+    // Update inode state once file write successful
+    inode[INODE_SIZE_OFFSET] = (char)size;
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+    openFileTable[FD].filePointer = 0;
+
+    return TFS_SUCCESS;
 }
 
 
