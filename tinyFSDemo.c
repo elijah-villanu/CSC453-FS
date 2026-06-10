@@ -21,6 +21,7 @@ const char *errToString(int err) {
         case ERR_FILE_TABLE_FULL:      return "ERR_FILE_TABLE_FULL";
         case ERR_BLOCK_OUT_OF_RANGE:   return "ERR_BLOCK_OUT_OF_RANGE";
         case ERR_INVALID_NAME:         return "ERR_INVALID_NAME";
+        case ERR_INVALID_PARAM:        return "ERR_INVALID_PARAM";
         default:                       return "UNKNOWN_ERROR";
     }
 }
@@ -86,6 +87,27 @@ int main() {
         printf("Opened file with fd = %d\n", ret_val);
     } else {
         printf("Failed to open: %s\n", errToString(ret_val));
+    }
+
+    // Writing to file1 (pass case)
+    printf("\n-Writing to file1-\n");
+    char data[] = "Im writing this into the file wooo";
+    ret_val = tfs_writeFile(fd1, data, sizeof(data));
+    if (ret_val == 0) {
+        printf("Wrote '%s' to file1\n", data);
+    } else {
+        printf("Failed to write to file1: %s\n", errToString(ret_val));
+    }
+
+    // Writing to closed file (should fail)
+    printf("\n-Writing to closed file (should fail)-\n");
+    // FD outside of allowed range
+    fileDescriptor out_of_range_fd = MAX_FILES + 1;
+    ret_val = tfs_writeFile(out_of_range_fd, data, sizeof(data));
+    if (ret_val == 0) {
+        printf("Wrote to fd = %d\n", out_of_range_fd);
+    } else {
+        printf("Failed to write: %s\n", errToString(ret_val));
     }
 
     printf("\n-Demo complete!-\n");

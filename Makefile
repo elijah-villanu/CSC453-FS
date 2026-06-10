@@ -15,5 +15,11 @@ libTinyFS.o: libTinyFS.c libTinyFS.h tinyFS.h libDisk.h libDisk.o tinyFS_errno.h
 libDisk.o: libDisk.c libDisk.h tinyFS.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+tfsTest: tfsTest.o libTinyFS.o libDisk.o
+	$(CC) $(CFLAGS) -o tfsTest tfsTest.o libTinyFS.o libDisk.o
+
+tfsTest.o: tfsTest.c libTinyFS.h tinyFS.h tinyFS_errno.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 clean:
-	rm -f $(OBJS) $(PROG)
+	rm -f $(OBJS) $(PROG) tfsTest tfsTest.o

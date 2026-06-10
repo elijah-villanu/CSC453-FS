@@ -14,8 +14,8 @@ static int findFreeBlock() {
     char superblock[BLOCKSIZE];
     if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
 
-    int numBlocks = superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
-    
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
     // Iterate through bitmap from offset for free blocks
     for (int byte = 0; byte < (numBlocks + 7) / 8; byte++) {
         unsigned char bitmapByte = superblock[SUPERBLOCK_BITMAP_OFFSET + byte];
@@ -35,8 +35,8 @@ static int setBitmapBit(int blockNum, int isFree) {
     char superblock[BLOCKSIZE];
     if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
 
-    int numBlocks = superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
-    
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
     // Validate block number
     if (blockNum < 0 || blockNum >= numBlocks) return ERR_BLOCK_OUT_OF_RANGE;
 
@@ -334,7 +334,8 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     }
 
     // Update inode state once file write successful
-    inode[INODE_SIZE_OFFSET] = (char)size;
+    // Store file size as 4 bytes
+    memcpy(&inode[INODE_SIZE_OFFSET], &size, sizeof(int));
     if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
     openFileTable[FD].filePointer = 0;
 
@@ -409,7 +410,9 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     char inode[BLOCKSIZE];
     int inodeBlock = openFileTable[FD].inodeBlock;
     if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
-    int fileSize = (unsigned char)inode[INODE_SIZE_OFFSET];
+    // Read file size as 4 bytes
+    int fileSize;
+    memcpy(&fileSize, &inode[INODE_SIZE_OFFSET], sizeof(int));
 
     int fp = openFileTable[FD].filePointer;
 
