@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 static OpenFileEntry openFileTable[MAX_FILES];
-static int fileCounter = 0;
+// static int fileCounter = 0; Temp comment out for warning
 static int currentMount = -1;
 
 /* HELPERS */
@@ -257,6 +257,9 @@ int tfs_closeFile(fileDescriptor FD) {
 int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
      // Making sure a file system exists first
      if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+
+     // TODO: implement
+     return -1;
 }
 
 
@@ -314,7 +317,8 @@ int tfs_deleteFile(fileDescriptor FD) {
 
 
 int tfs_readByte(fileDescriptor FD, char *buffer) {
-    
+    // TODO: implement
+    return -1;
 }
 
 
