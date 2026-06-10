@@ -4,6 +4,8 @@
 #include "tinyFS_errno.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 
 static OpenFileEntry openFileTable[MAX_FILES];
 static int currentMount = -1;
@@ -162,7 +164,7 @@ fileDescriptor tfs_openFile(char *name) {
     // Filename validation
     if (name == NULL) return ERR_INVALID_NAME;
     int nameLen = strlen(name);
-    if (nameLen < 1 || nameLen > 8) return ERR_INVALID_NAME;
+    if (nameLen < 1 || nameLen > MAX_NAME_LEN) return ERR_INVALID_NAME;
     
     // TODO: Filename check for alphanumeric
 
@@ -204,6 +206,13 @@ fileDescriptor tfs_openFile(char *name) {
         }
     }
 
+    // File exists, update access timestamp
+    if (inodeBlock != -1) {
+        time_t now = time(NULL);
+        memcpy(&block[INODE_ACCESS_TS], &now, sizeof(time_t));
+        writeBlock(currentMount, inodeBlock, block);
+    }
+
     // File doesn't exist (no inode found) create file
     if (inodeBlock == -1) {
         inodeBlock = findFreeBlock();
@@ -215,8 +224,14 @@ fileDescriptor tfs_openFile(char *name) {
         newInode[BLOCK_TYPE_OFFSET] = INODE;
         newInode[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
         newInode[INODE_FIRST_EXTENT] = 0; // no extents yet
-        strncpy(&newInode[INODE_NAME_OFFSET], name, 8);
+        strncpy(&newInode[INODE_NAME_OFFSET], name, MAX_NAME_LEN);
         newInode[INODE_SIZE_OFFSET]  = 0; // empty file
+
+        // Setting creation modification and access timestamps
+        time_t now = time(NULL);
+        memcpy(&newInode[INODE_CREATION_TS], &now, sizeof(time_t));
+        memcpy(&newInode[INODE_MODIFICATION_TS], &now, sizeof(time_t));
+        memcpy(&newInode[INODE_ACCESS_TS], &now, sizeof(time_t));
 
         // Write inode to disk
         if (writeBlock(currentMount, inodeBlock, newInode) < 0) return ERR_BLOCK_WRITE;
@@ -228,9 +243,9 @@ fileDescriptor tfs_openFile(char *name) {
     openFileTable[fd].inUse = 1;
     openFileTable[fd].inodeBlock = inodeBlock;
     openFileTable[fd].filePointer = 0;
-    strncpy(openFileTable[fd].name, name, 8);
+    strncpy(openFileTable[fd].name, name, MAX_NAME_LEN);
     // Null terminate filename
-    openFileTable[fd].name[8] = '\0';
+    openFileTable[fd].name[MAX_NAME_LEN] = '\0';
 
     return fd;
 }
@@ -336,6 +351,9 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     // Update inode state once file write successful
     // Store file size as 4 bytes
     memcpy(&inode[INODE_SIZE_OFFSET], &size, sizeof(int));
+    // Update modification timestamp
+    time_t now = time(NULL);
+    memcpy(&inode[INODE_MODIFICATION_TS], &now, sizeof(time_t));
     if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
     openFileTable[FD].filePointer = 0;
 
@@ -437,6 +455,11 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
     *buffer = extent[EXTENT_DATA_OFFSET + byteInExtent];
 
+    // Update access timestamp
+    time_t now = time(NULL);
+    memcpy(&inode[INODE_ACCESS_TS], &now, sizeof(time_t));
+    writeBlock(currentMount, inodeBlock, inode);
+
     // Increment file pointer
     openFileTable[FD].filePointer++;
     return TFS_SUCCESS;
@@ -458,3 +481,83 @@ int tfs_seek(fileDescriptor FD, int offset) {
     return TFS_SUCCESS;
 }
 
+
+// Feature b: Directory listing and file renaming
+int tfs_readdir(void) {
+    // Make sure a file system is mounted
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+
+    // Read superblock to get total blocks
+    char superblock[BLOCKSIZE];
+    if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
+    // Scan all blocks for inodes and print their names
+    printf("Files on disk:\n");
+    char block[BLOCKSIZE];
+    for (int i = 1; i < numBlocks; i++) {
+        if (readBlock(currentMount, i, block) < 0) continue;
+        if (block[BLOCK_TYPE_OFFSET] != INODE) continue;
+        if (block[MAGIC_NUM_OFFSET] != MAGIC_NUMBER) continue;
+        printf("- %s\n", &block[INODE_NAME_OFFSET]);
+    }
+    return TFS_SUCCESS;
+}
+
+int tfs_rename(fileDescriptor FD, char *newName) {
+    // Make sure a file system is mounted
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Validate file descriptor
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    // Validate new name
+    if (newName == NULL) return ERR_INVALID_NAME;
+    int nameLen = strlen(newName);
+    if (nameLen < 1 || nameLen > MAX_NAME_LEN) return ERR_INVALID_NAME;
+
+    // Read the inode block
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+
+    // Overwrite the name in the inode
+    memset(&inode[INODE_NAME_OFFSET], 0x00, MAX_NAME_LEN + 1);
+    strncpy(&inode[INODE_NAME_OFFSET], newName, MAX_NAME_LEN);
+
+    // Write updated inode back to disk
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+
+    // Update open file table entry
+    strncpy(openFileTable[FD].name, newName, MAX_NAME_LEN);
+    openFileTable[FD].name[MAX_NAME_LEN] = '\0';
+
+    return TFS_SUCCESS;
+}
+
+// Feature e: Timestamps
+int tfs_readFileInfo(fileDescriptor FD) {
+    // Make sure a file system is mounted
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Validate file descriptor
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+
+    // Read inode block
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+
+    // Extract timestamps from inode
+    time_t creation, modification, access;
+    memcpy(&creation, &inode[INODE_CREATION_TS], sizeof(time_t));
+    memcpy(&modification, &inode[INODE_MODIFICATION_TS], sizeof(time_t));
+    memcpy(&access, &inode[INODE_ACCESS_TS], sizeof(time_t));
+
+    // Print file info with timestamps
+    printf("File: %s\n", openFileTable[FD].name);
+    printf("- Created: %s", ctime(&creation));
+    printf("- Modified: %s", ctime(&modification));
+    printf("- Accessed: %s", ctime(&access));
+
+    return TFS_SUCCESS;
+}

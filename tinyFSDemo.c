@@ -110,6 +110,52 @@ int main() {
         printf("Failed to write: %s\n", errToString(ret_val));
     }
 
+    // Listing all files on disk (should show file1 and file2)
+    printf("\n-Listing directory-\n");
+    ret_val = tfs_readdir();
+    if (ret_val != 0) {
+        printf("Failed to readdir: %s\n", errToString(ret_val));
+    }
+
+    // Renaming file1 to renamed1 (pass case)
+    printf("\n-Renaming file1 to renamed1-\n");
+    ret_val = tfs_rename(fd1, "renamed1");
+    if (ret_val == 0) {
+        printf("Renamed file1 to renamed1\n");
+    } else {
+        printf("Failed to rename: %s\n", errToString(ret_val));
+    }
+
+    // Listing directory again (should show renamed1 and file2)
+    printf("\n-Listing directory after rename-\n");
+    ret_val = tfs_readdir();
+    if (ret_val != 0) {
+        printf("Failed to readdir: %s\n", errToString(ret_val));
+    }
+
+    // Renaming with invalid name (should fail)
+    printf("\n-Renaming with too long name (should fail)-\n");
+    ret_val = tfs_rename(fd1, "abcdefghijklk");
+    if (ret_val == 0) {
+        printf("Renamed successfully\n");
+    } else {
+        printf("Failed to rename: %s\n", errToString(ret_val));
+    }
+
+    // Reading file info for renamed1 (should show timestamps)
+    printf("\n-Reading file info for renamed1-\n");
+    ret_val = tfs_readFileInfo(fd1);
+    if (ret_val != 0) {
+        printf("Failed to read file info: %s\n", errToString(ret_val));
+    }
+
+    // Reading file info for file2 (should show timestamps)
+    printf("\n-Reading file info for file2-\n");
+    ret_val = tfs_readFileInfo(fd2);
+    if (ret_val != 0) {
+        printf("Failed to read file info: %s\n", errToString(ret_val));
+    }
+
     printf("\n-Demo complete!-\n");
     return 0;
 }

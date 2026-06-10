@@ -27,7 +27,11 @@
 // Inode specific layout
 #define INODE_FIRST_EXTENT 2 // First extent block num
 #define INODE_NAME_OFFSET 4 // Start of name, up to 9 total bytes
-#define INODE_SIZE_OFFSET 13 // File size
+#define MAX_NAME_LEN 8 // Max filename length (not including null term)
+#define INODE_SIZE_OFFSET 13 // File size (4 bytes)
+#define INODE_CREATION_TS 17 // Creation timestamp (8 bytes)
+#define INODE_MODIFICATION_TS 25 // Modification timestamp (8 bytes)
+#define INODE_ACCESS_TS 33 // Access timestamp (8 bytes)
 
 // File extent specific layout
 #define FILE_EXTENT_NEXT 2 // Block num of next extent (set to zero if last)
@@ -57,5 +61,12 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size);
 int tfs_deleteFile(fileDescriptor FD);
 int tfs_readByte(fileDescriptor FD, char *buffer);
 int tfs_seek(fileDescriptor FD, int offset);
+
+// Feature b: Directory listing and file renaming
+int tfs_readdir(void);
+int tfs_rename(fileDescriptor FD, char *newName);
+
+// Feature e: Timestamps
+int tfs_readFileInfo(fileDescriptor FD);
 
 #endif
