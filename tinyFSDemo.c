@@ -26,7 +26,8 @@ const char *errToString(int err) {
 }
 
 int main() {
-    printf("Creating tiny file system\n");
+    // Creating file system
+    printf("-Creating tiny file system-\n");
     int fs = tfs_mkfs(DEFAULT_DISK_NAME, DEFAULT_DISK_SIZE);
     if (fs == 0) {
         printf("%s created with size %d\n", DEFAULT_DISK_NAME, DEFAULT_DISK_SIZE);
@@ -34,6 +35,59 @@ int main() {
         printf("Failed to create tinyFS: %s\n", errToString(fs));
     }
 
-    printf("Demo complete!\n");
+    // Mounting file system (pass case)
+    printf("\n-Mounting file system-\n");
+    int ret_val = tfs_mount(DEFAULT_DISK_NAME);
+    if (ret_val == 0) {
+        printf("%s mounted successfully\n", DEFAULT_DISK_NAME);
+    } else {
+        printf("Failed to mount: %s\n", errToString(ret_val));
+    }
+
+    // Mounting file system (fail case)
+    printf("\n-Mounting already mounted disk (should fail)-\n");
+    ret_val = tfs_mount(DEFAULT_DISK_NAME);
+    if (ret_val == 0) {
+        printf("%s mounted successfully\n", DEFAULT_DISK_NAME);
+    } else {
+        printf("Failed to mount: %s\n", errToString(ret_val));
+    }
+
+    // Opening first file (pass case)
+    printf("\n-Opening files-\n");
+    int fd1 = tfs_openFile("file1");
+    if (fd1 >= 0) {
+        printf("Opened 'file1' with fd = %d\n", fd1);
+    } else {
+        printf("Failed to open file1: %s\n", errToString(fd1));
+    }
+
+    // Opening second file (pass case)
+    int fd2 = tfs_openFile("file2");
+    if (fd2 >= 0) {
+        printf("Opened 'file2' with fd = %d\n", fd2);
+    } else {
+        printf("Failed to open file2: %s\n", errToString(fd2));
+    }
+
+    // Opening file that already exists (should return same fd)
+    printf("\n-Opening file1 again\n");
+    int fd1_dup = tfs_openFile("file1");
+    if (fd1_dup >= 0) {
+        printf("Opened 'file1' with fd = %d (expecting %d)\n", fd1_dup, fd1);
+    } else {
+        printf("Failed to open file1: %s\n", errToString(fd1_dup));
+    }
+
+    // Opening file with invalid name (too long: should fail)
+    printf("\n-Opening file with invalid name (should fail)-\n");
+    ret_val = tfs_openFile("aaaaaaaaaaaa");
+    if (ret_val >= 0) {
+        printf("Opened file with fd = %d\n", ret_val);
+    } else {
+        printf("Failed to open: %s\n", errToString(ret_val));
+    }
+
+    printf("\n-Demo complete!-\n");
     return 0;
 }
