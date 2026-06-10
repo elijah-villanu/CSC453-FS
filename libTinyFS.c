@@ -72,7 +72,7 @@ int tfs_mkfs(char *filename, int nBytes) {
     char initBlock[BLOCKSIZE];
     memset(initBlock, 0x00, BLOCKSIZE);
     for (int i = 0; i < numBlocks; i++) {
-        if(writeBlock(diskNum, i, initBlock) < 0) return -1;
+        if(writeBlock(diskNum, i, initBlock) < 0) return ERR_BLOCK_WRITE;
     }
 
     // Initialize superblock
@@ -89,13 +89,12 @@ int tfs_mkfs(char *filename, int nBytes) {
         superblock[SUPERBLOCK_BITMAP_OFFSET + i] = 0xFF;
     }
     
-    // FROM CLAUDE
     // Mark block 0 (superblock) as used in bitmap
     superblock[SUPERBLOCK_BITMAP_OFFSET] &= ~(1 << 7); // clear bit 7 of first byte
     // Store total block count in superblock
     superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET] = (char)numBlocks;
     
-    if (writeBlock(diskNum, 0, superblock) < 0) return -1;
+    if (writeBlock(diskNum, 0, superblock) < 0) return ERR_BLOCK_WRITE;
 
     // Initialize rest of free blocks
     char freeBlock[BLOCKSIZE];
@@ -108,7 +107,7 @@ int tfs_mkfs(char *filename, int nBytes) {
     }
 
     closeDisk(diskNum);
-    return 0;
+    return TFS_SUCCESS;
 }
 
 
@@ -247,8 +246,6 @@ int tfs_closeFile(fileDescriptor FD) {
     // Make sure file is actually in use
     if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
 
-    // TODO: May need to also free anything from openFile (if we end up doing any malloc)
-
     // Clearing entry of provided file descriptor
     openFileTable[FD].inUse = 0;
     openFileTable[FD].inodeBlock = -1;
@@ -260,15 +257,65 @@ int tfs_closeFile(fileDescriptor FD) {
 int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
      // Making sure a file system exists first
      if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    
-
 }
 
 
-int tfs_deleteFile(fileDescriptor FD);
+int tfs_deleteFile(fileDescriptor FD) {
+    // Making sure a file system exists first
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Making sure file descriptor in correct range
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+
+    // Read inode block
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;   
+
+    // Get first file extent block 
+    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
+    // Iterate through all file extents
+    while (extentBlock != 0) {
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+
+        int nextExtent = (unsigned char)extent[FILE_EXTENT_NEXT];
+        
+        // Update bitmap
+        if (setBitmapBit(extentBlock, 1) < 0) return ERR_BLOCK_WRITE;
+
+        // Update disk as free block
+        char freeBlock[BLOCKSIZE];
+        memset(freeBlock, 0x00, BLOCKSIZE);
+        freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
+        freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+        if (writeBlock(currentMount, extentBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
+
+        extentBlock = nextExtent;
+    }
+
+    // Free inode itself
+    if (setBitmapBit(inodeBlock, 1) < 0) return ERR_BLOCK_WRITE;
+    char freeBlock[BLOCKSIZE];
+    memset(freeBlock, 0x00, BLOCKSIZE);
+    freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
+    freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+    if (writeBlock(currentMount, inodeBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
+
+    // Update open file table
+    openFileTable[FD].inUse = 0;
+    openFileTable[FD].inodeBlock = -1;
+    openFileTable[FD].filePointer = 0;   
+    openFileTable[FD].name[0] = '\0';
+    
+    return TFS_SUCCESS;
+}
 
 
-int tfs_readByte(fileDescriptor FD, char *buffer);
+int tfs_readByte(fileDescriptor FD, char *buffer) {
+    
+}
 
 
 int tfs_seek(fileDescriptor FD, int offset) {
