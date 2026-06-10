@@ -22,6 +22,7 @@ const char *errToString(int err) {
         case ERR_BLOCK_OUT_OF_RANGE:   return "ERR_BLOCK_OUT_OF_RANGE";
         case ERR_INVALID_NAME:         return "ERR_INVALID_NAME";
         case ERR_INVALID_PARAM:        return "ERR_INVALID_PARAM";
+        case ERR_FILE_READ_ONLY:      return "ERR_FILE_READ_ONLY";
         default:                       return "UNKNOWN_ERROR";
     }
 }
@@ -154,6 +155,200 @@ int main() {
     ret_val = tfs_readFileInfo(fd2);
     if (ret_val != 0) {
         printf("Failed to read file info: %s\n", errToString(ret_val));
+    }
+
+    // Reading bytes from renamed1 (pass case)
+    printf("\n-Reading bytes from renamed1-\n");
+    char readBuf;
+    printf("Read: ");
+    while (tfs_readByte(fd1, &readBuf) >= 0) {
+        printf("%c", readBuf);
+    }
+    printf("\n");
+
+    // Reading from empty file (should fail with EOF)
+    printf("\n-Reading from empty file2 (should fail)-\n");
+    ret_val = tfs_readByte(fd2, &readBuf);
+    if (ret_val == 0) {
+        printf("Read byte: %c\n", readBuf);
+    } else {
+        printf("Failed to read: %s\n", errToString(ret_val));
+    }
+
+    // Seeking to offset 3 in renamed1 and reading
+    printf("\n-Seeking to offset 3 in renamed1-\n");
+    ret_val = tfs_seek(fd1, 3);
+    if (ret_val == 0) {
+        printf("Seeked to offset 3\n");
+    } else {
+        printf("Failed to seek: %s\n", errToString(ret_val));
+    }
+    ret_val = tfs_readByte(fd1, &readBuf);
+    if (ret_val == 0) {
+        printf("Byte at offset 3: '%c'\n", readBuf);
+    } else {
+        printf("Failed to read: %s\n", errToString(ret_val));
+    }
+
+    // Seeking with negative offset (should fail)
+    printf("\n-Seeking with negative offset (should fail)-\n");
+    ret_val = tfs_seek(fd1, -1);
+    if (ret_val == 0) {
+        printf("Seeked to -1\n");
+    } else {
+        printf("Failed to seek: %s\n", errToString(ret_val));
+    }
+
+    // Display block map before defrag
+    printf("\n-Displaying block fragments-\n");
+    tfs_displayFragments();
+
+    // Making renamed1 read-only
+    printf("\n-Making renamed1 read-only-\n");
+    ret_val = tfs_makeRO("renamed1");
+    if (ret_val == 0) {
+        printf("renamed1 is now read-only\n");
+    } else {
+        printf("Failed to make RO: %s\n", errToString(ret_val));
+    }
+
+    // Writing to read-only file (should fail)
+    printf("\n-Writing to read-only file (should fail)-\n");
+    fd1 = tfs_openFile("renamed1");
+    ret_val = tfs_writeFile(fd1, data, sizeof(data));
+    if (ret_val == 0) {
+        printf("Wrote to renamed1\n");
+    } else {
+        printf("Failed to write: %s\n", errToString(ret_val));
+    }
+
+    // Deleting read-only file (should fail)
+    printf("\n-Deleting read-only file (should fail)-\n");
+    ret_val = tfs_deleteFile(fd1);
+    if (ret_val == 0) {
+        printf("Deleted renamed1\n");
+    } else {
+        printf("Failed to delete: %s\n", errToString(ret_val));
+    }
+
+    // Making renamed1 read-write again
+    printf("\n-Making renamed1 read-write again-\n");
+    ret_val = tfs_makeRW("renamed1");
+    if (ret_val == 0) {
+        printf("renamed1 is now read-write\n");
+    } else {
+        printf("Failed to make RW: %s\n", errToString(ret_val));
+    }
+
+    // Writing to read-write file (should work now)
+    printf("\n-Writing to read-write file (should work)-\n");
+    ret_val = tfs_writeFile(fd1, data, sizeof(data));
+    if (ret_val == 0) {
+        printf("Wrote '%s' to renamed1\n", data);
+    } else {
+        printf("Failed to write: %s\n", errToString(ret_val));
+    }
+
+    // WriteByte: overwrite byte at offset 0 with 'X'
+    printf("\n-WriteByte: overwrite byte 0 with 'X'-\n");
+    tfs_seek(fd1, 0);
+    ret_val = tfs_writeByte(fd1, 'X');
+    if (ret_val == 0) {
+        printf("Wrote 'X' at offset 0\n");
+    } else {
+        printf("Failed to writeByte: %s\n", errToString(ret_val));
+    }
+
+    // Read back to verify writeByte worked
+    printf("\n-Reading back after writeByte-\n");
+    tfs_seek(fd1, 0);
+    printf("Read: ");
+    while (tfs_readByte(fd1, &readBuf) >= 0) {
+        printf("%c", readBuf);
+    }
+    printf("\n");
+
+    // Defragment the disk
+    printf("\n-Defragmenting disk-\n");
+    ret_val = tfs_defrag();
+    if (ret_val == 0) {
+        printf("Defragmentation complete\n");
+    } else {
+        printf("Failed to defrag: %s\n", errToString(ret_val));
+    }
+
+    // Display block map after defrag
+    printf("\n-Displaying block fragments after defrag-\n");
+    tfs_displayFragments();
+
+    // Verify file still readable after defrag
+    printf("\n-Reading renamed1 after defrag-\n");
+    tfs_seek(fd1, 0);
+    printf("Read: ");
+    while (tfs_readByte(fd1, &readBuf) >= 0) {
+        printf("%c", readBuf);
+    }
+    printf("\n");
+
+    // Closing renamed1 (pass case)
+    printf("\n-Closing renamed1-\n");
+    ret_val = tfs_closeFile(fd1);
+    if (ret_val == 0) {
+        printf("Closed renamed1\n");
+    } else {
+        printf("Failed to close: %s\n", errToString(ret_val));
+    }
+
+    // Reading from closed file (should fail)
+    printf("\n-Reading from closed file (should fail)-\n");
+    ret_val = tfs_readByte(fd1, &readBuf);
+    if (ret_val == 0) {
+        printf("Read byte: %c\n", readBuf);
+    } else {
+        printf("Failed to read: %s\n", errToString(ret_val));
+    }
+
+    // Deleting file2 (pass case)
+    printf("\n-Deleting file2-\n");
+    ret_val = tfs_deleteFile(fd2);
+    if (ret_val == 0) {
+        printf("Deleted file2\n");
+    } else {
+        printf("Failed to delete: %s\n", errToString(ret_val));
+    }
+
+    // Deleting already deleted file (should fail)
+    printf("\n-Deleting file2 again (should fail)-\n");
+    ret_val = tfs_deleteFile(fd2);
+    if (ret_val == 0) {
+        printf("Deleted file2\n");
+    } else {
+        printf("Failed to delete: %s\n", errToString(ret_val));
+    }
+
+    // Listing directory after delete (should only show renamed1)
+    printf("\n-Listing directory after delete-\n");
+    ret_val = tfs_readdir();
+    if (ret_val != 0) {
+        printf("Failed to readdir: %s\n", errToString(ret_val));
+    }
+
+    // Unmounting (pass case)
+    printf("\n-Unmounting-\n");
+    ret_val = tfs_unmount();
+    if (ret_val == 0) {
+        printf("Unmounted successfully\n");
+    } else {
+        printf("Failed to unmount: %s\n", errToString(ret_val));
+    }
+
+    // Unmounting when nothing mounted (should fail)
+    printf("\n-Unmounting again (should fail)-\n");
+    ret_val = tfs_unmount();
+    if (ret_val == 0) {
+        printf("Unmounted successfully\n");
+    } else {
+        printf("Failed to unmount: %s\n", errToString(ret_val));
     }
 
     printf("\n-Demo complete!-\n");

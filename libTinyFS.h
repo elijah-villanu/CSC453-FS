@@ -32,6 +32,7 @@
 #define INODE_CREATION_TS 17 // Creation timestamp (8 bytes)
 #define INODE_MODIFICATION_TS 25 // Modification timestamp (8 bytes)
 #define INODE_ACCESS_TS 33 // Access timestamp (8 bytes)
+#define INODE_RO_FLAG 41 // Read-only flag (1 byte, 0 = r/w, 1 = readonly)
 
 // File extent specific layout
 #define FILE_EXTENT_NEXT 2 // Block num of next extent (set to zero if last)
@@ -68,5 +69,14 @@ int tfs_rename(fileDescriptor FD, char *newName);
 
 // Feature e: Timestamps
 int tfs_readFileInfo(fileDescriptor FD);
+
+// Feature d: Read-only and writeByte
+int tfs_makeRO(char *name);
+int tfs_makeRW(char *name);
+int tfs_writeByte(fileDescriptor FD, unsigned int data);
+
+// Feature a: Fragmentation
+int tfs_displayFragments(void);
+int tfs_defrag(void);
 
 #endif

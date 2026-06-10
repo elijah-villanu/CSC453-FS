@@ -1,0 +1,21 @@
+# CSC453-FS
+
+Names: Elijah Villanueva, Hunter Lathery
+
+Starting our tinyFS implementation, we chose a bitmap which we stored in the superblock to represent each block and whether it was free or not. We thought that this would be easier to "visualize" the state of the blocks, and since there wasn't many blocks available in this FS, it wouldn't be time consuming to scan it. For data storage, we chose to link the extents by pointing to the next extent, it seemed more trivial for us to just freely link the next blocks rather than having to manage our blocks in a more complex way.
+
+One downside of our system is that it just a flat directory, we decided to choose four of the smaller 10% additional features because we didn't build our initial FS with the hierarchy in mind, so to be able to support that would cause for us to have to rewrite a lot of functionality. So we ended up with the following additional features
+
+- Fragmentation info and defragmentation:
+  Prints the state of our block map using either [S, I, D, F] to represent the type of block. And then tfs_defrag to move all the used blocks towards the front, leaving all the free ones at the end.
+
+- Directory listing and file renaming:
+  We loop over all blocks for inodes and then print the stored filename, and then just overwrite the name inside the inode and open file table whenever user wants to.
+
+- Read only and writeByte:
+  We use a read only flag stored inthe inode, using '0' as read/write or '1' as a read only flag. Then writeFile and deleteFile will make sure to check that flag before doing any operation, erroring if set to read only. 
+
+- Timestamps:
+  Inside each inode, we store the timestamps for creation/modify/access, then whenever readFileInfo is called, we print that using the time header and ctime. We made sure that all of these are properly updated on any read/write  operations.
+
+In all of the above, we have demo test cases that print the case working (with formatted output for things like fragmentation/timestamp/ls), and descriptive error codes for when an operation should not be allowed.

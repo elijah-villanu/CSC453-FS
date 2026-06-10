@@ -282,6 +282,9 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     int inodeBlock = openFileTable[FD].inodeBlock;
     if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
 
+    // Check read only flag
+    if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
+
     // Free any existing extent blocks before writing new data
     int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
     while (extentBlock != 0) {
@@ -372,9 +375,12 @@ int tfs_deleteFile(fileDescriptor FD) {
     // Read inode block
     char inode[BLOCKSIZE];
     int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;   
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
 
-    // Get first file extent block 
+    // Check read-only flag
+    if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
+
+    // Get first file extent block
     int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
     // Iterate through all file extents
     while (extentBlock != 0) {
@@ -558,6 +564,216 @@ int tfs_readFileInfo(fileDescriptor FD) {
     printf("- Created: %s", ctime(&creation));
     printf("- Modified: %s", ctime(&modification));
     printf("- Accessed: %s", ctime(&access));
+
+    return TFS_SUCCESS;
+}
+
+// Helper: find inode block number by filename, returns -1 if not found
+static int findInodeByName(char *name) {
+    char superblock[BLOCKSIZE];
+    if (readBlock(currentMount, 0, superblock) < 0) return -1;
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
+    char block[BLOCKSIZE];
+    for (int i = 1; i < numBlocks; i++) {
+        if (readBlock(currentMount, i, block) < 0) continue;
+        if (block[BLOCK_TYPE_OFFSET] != INODE) continue;
+        if (block[MAGIC_NUM_OFFSET] != MAGIC_NUMBER) continue;
+        if (strcmp(&block[INODE_NAME_OFFSET], name) == 0) return i;
+    }
+    return -1;
+}
+
+// Feature d: Read only and writeByte
+int tfs_makeRO(char *name) {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    if (name == NULL) return ERR_INVALID_NAME;
+
+    int inodeBlock = findInodeByName(name);
+    if (inodeBlock < 0) return ERR_FILE_NOT_FOUND;
+
+    // Read inode and set RO flag
+    char inode[BLOCKSIZE];
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    inode[INODE_RO_FLAG] = 1;
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+
+    return TFS_SUCCESS;
+}
+
+int tfs_makeRW(char *name) {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    if (name == NULL) return ERR_INVALID_NAME;
+
+    int inodeBlock = findInodeByName(name);
+    if (inodeBlock < 0) return ERR_FILE_NOT_FOUND;
+
+    // Read inode and clear RO flag
+    char inode[BLOCKSIZE];
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    inode[INODE_RO_FLAG] = 0;
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+
+    return TFS_SUCCESS;
+}
+
+int tfs_writeByte(fileDescriptor FD, unsigned int data) {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+
+    // Read inode
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+
+    // Check readonly flag
+    if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
+
+    // Get file size
+    int fileSize;
+    memcpy(&fileSize, &inode[INODE_SIZE_OFFSET], sizeof(int));
+
+    int fp = openFileTable[FD].filePointer;
+    if (fp >= fileSize) return ERR_EOF;
+
+    // Find the correct extent block (same traversal as readByte)
+    int extentIndex = fp / EXTENT_DATA_SIZE;
+    int byteInExtent = fp % EXTENT_DATA_SIZE;
+
+    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
+    for (int i = 0; i < extentIndex; i++) {
+        if (extentBlock == 0) return ERR_EOF;
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+        extentBlock = (unsigned char)extent[FILE_EXTENT_NEXT];
+    }
+
+    // Read extent, overwrite the byte, write back
+    char extent[BLOCKSIZE];
+    if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+    extent[EXTENT_DATA_OFFSET + byteInExtent] = (char)data;
+    if (writeBlock(currentMount, extentBlock, extent) < 0) return ERR_BLOCK_WRITE;
+
+    // Update modification timestamp
+    time_t now = time(NULL);
+    memcpy(&inode[INODE_MODIFICATION_TS], &now, sizeof(time_t));
+    if (writeBlock(currentMount, inodeBlock, inode) < 0) return ERR_BLOCK_WRITE;
+
+    // Increment file pointer
+    openFileTable[FD].filePointer++;
+    return TFS_SUCCESS;
+}
+
+// Feature a: Fragmentation info and defragmentation
+int tfs_displayFragments(void) {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+
+    char superblock[BLOCKSIZE];
+    if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
+    printf("Block map (%d blocks):\n", numBlocks);
+    printf("S: Superblock, I: Inode, D: Data, F: Free\n");
+    char block[BLOCKSIZE];
+    for (int i = 0; i < numBlocks; i++) {
+        if (readBlock(currentMount, i, block) < 0) continue;
+        char type;
+        switch (block[BLOCK_TYPE_OFFSET]) {
+            case SUPERBLOCK: type = 'S'; break;
+            case INODE: type = 'I'; break;
+            case FILE_EXTENT: type = 'D'; break;
+            case FREE_BLOCK: type = 'F'; break;
+            default: type = '?'; break;
+        }
+        printf("[%d:%c] ", i, type);
+    }
+    printf("\n");
+    return TFS_SUCCESS;
+}
+
+int tfs_defrag(void) {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+
+    char superblock[BLOCKSIZE];
+    if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
+    // Read all blocks into memory
+    char blocks[256][BLOCKSIZE];
+    for (int i = 0; i < numBlocks; i++) {
+        if (readBlock(currentMount, i, blocks[i]) < 0) return ERR_DISK_READ;
+    }
+
+    // Build old-to-new block mapping
+    // Used blocks go first (skip superblock at 0), free blocks at end
+    int newPos[256];
+    int usedSlot = 1;
+    int freeSlot = numBlocks - 1;
+
+    // Superblock stays at 0
+    newPos[0] = 0;
+
+    // First pass assignss new positions for used blocks
+    for (int i = 1; i < numBlocks; i++) {
+        if (blocks[i][BLOCK_TYPE_OFFSET] != FREE_BLOCK) {
+            newPos[i] = usedSlot++;
+        }
+    }
+    // Second pass assigns new positions for free blocks from the end
+    for (int i = 1; i < numBlocks; i++) {
+        if (blocks[i][BLOCK_TYPE_OFFSET] == FREE_BLOCK) {
+            newPos[i] = freeSlot--;
+        }
+    }
+
+    // Update all internal block pointers using the mapping
+    for (int i = 1; i < numBlocks; i++) {
+        if (blocks[i][BLOCK_TYPE_OFFSET] == INODE) {
+            // Update first extent pointer
+            int oldExtent = (unsigned char)blocks[i][INODE_FIRST_EXTENT];
+            if (oldExtent != 0) {
+                blocks[i][INODE_FIRST_EXTENT] = (char)newPos[oldExtent];
+            }
+        } else if (blocks[i][BLOCK_TYPE_OFFSET] == FILE_EXTENT) {
+            // Update next extent pointer
+            int oldNext = (unsigned char)blocks[i][FILE_EXTENT_NEXT];
+            if (oldNext != 0) {
+                blocks[i][FILE_EXTENT_NEXT] = (char)newPos[oldNext];
+            }
+        }
+    }
+
+    // Rearrange blocks into new order
+    char temp[256][BLOCKSIZE];
+    memcpy(temp, blocks, sizeof(blocks));
+    for (int i = 1; i < numBlocks; i++) {
+        memcpy(blocks[newPos[i]], temp[i], BLOCKSIZE);
+    }
+
+    // Rebuild superblock bitmap
+    int bitmapSize = (numBlocks + 7) / 8;
+    memset(&blocks[0][SUPERBLOCK_BITMAP_OFFSET], 0x00, bitmapSize);
+    for (int i = 0; i < numBlocks; i++) {
+        int byteIndex = i / 8;
+        int bitIndex = 7 - (i % 8);
+        if (blocks[i][BLOCK_TYPE_OFFSET] == FREE_BLOCK) {
+            blocks[0][SUPERBLOCK_BITMAP_OFFSET + byteIndex] |= (1 << bitIndex);
+        }
+    }
+
+    // Write all blocks back to disk
+    for (int i = 0; i < numBlocks; i++) {
+        if (writeBlock(currentMount, i, blocks[i]) < 0) return ERR_BLOCK_WRITE;
+    }
+
+    // Update open file table inode block references
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (openFileTable[i].inUse) {
+            int oldInode = openFileTable[i].inodeBlock;
+            openFileTable[i].inodeBlock = newPos[oldInode];
+        }
+    }
 
     return TFS_SUCCESS;
 }
