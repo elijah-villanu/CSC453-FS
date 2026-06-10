@@ -6,7 +6,6 @@
 #include <stdlib.h>
 
 static OpenFileEntry openFileTable[MAX_FILES];
-// static int fileCounter = 0; Temp comment out for warning
 static int currentMount = -1;
 
 /* HELPERS */
@@ -255,11 +254,32 @@ int tfs_closeFile(fileDescriptor FD) {
 
 
 int tfs_writeFile(fileDescriptor FD,char *buffer, int size) {
-     // Making sure a file system exists first
-     if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Making sure a file system exists first
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    // Making sure file descriptor in correct range
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    if (buffer == NULL) return ERR_INVALID_PARAM;
+    if (size < 0) return ERR_INVALID_PARAM;
+    
+    /*
+    // Read inode block
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
 
-     // TODO: implement
-     return -1;
+    // Free any existing extent blocks before writing new data
+    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
+    while (extentBlock != 0) {
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+    
+    }
+    */
+
+    // TODO: implement
+    return -1;
 }
 
 
@@ -317,8 +337,47 @@ int tfs_deleteFile(fileDescriptor FD) {
 
 
 int tfs_readByte(fileDescriptor FD, char *buffer) {
-    // TODO: implement
-    return -1;
+    // Making sure a file system exists first
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;   
+    // Making sure file descriptor in correct range   
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    // BUFFER ERROR CODE NEEDED
+    if (buffer == NULL) return ERR_INVALID_PARAM;
+
+    // Get file size from inode
+    char inode[BLOCKSIZE];
+    int inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int fileSize = (unsigned char)inode[INODE_SIZE_OFFSET];
+
+    int fp = openFileTable[FD].filePointer;
+
+    // Check if fp is past EOF
+    if (fp >= fileSize) return ERR_EOF;
+
+    // Find block that fp points to
+    int extentIndex = fp / EXTENT_DATA_SIZE;
+    int byteInExtent = fp % EXTENT_DATA_SIZE;
+    
+    // Traverse through each block until target block
+    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
+    for (int i = 0; i < extentIndex; i++) {
+        if (extentBlock == 0) return ERR_EOF;
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+        extentBlock = (unsigned char)extent[FILE_EXTENT_NEXT];
+    }
+
+    // Read the target extent and copy the byte to buffer
+    char extent[BLOCKSIZE];
+    if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+    *buffer = extent[EXTENT_DATA_OFFSET + byteInExtent];
+
+    // Increment file pointer
+    openFileTable[FD].filePointer++;
+    return TFS_SUCCESS;
 }
 
 

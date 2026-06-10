@@ -17,5 +17,6 @@
 #define ERR_FILE_TABLE_FULL -13 // OpenFileTable is full (unless we dynamically allocate)
 #define ERR_BLOCK_OUT_OF_RANGE -14 // Requested block out of range
 #define ERR_INVALID_NAME -15 // Invalid filename requested
+#define ERR_INVALID_PARAM -16 // Passed in param is invalid
 
 #endif
