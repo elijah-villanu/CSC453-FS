@@ -11,6 +11,57 @@ static OpenFileEntry openFileTable[MAX_FILES];
 static int currentMount = -1;
 
 /* HELPERS */
+// Makes sure a file system exists first
+static int validateMounted() {
+    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    return TFS_SUCCESS;
+}
+
+// Validates file descriptor
+static int validateFD(fileDescriptor FD) {
+    // Making sure file descriptor in correct range
+    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
+    // Make sure file is actually in use
+    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+
+    return TFS_SUCCESS;
+}
+
+// Validates filename
+static int validateName(char *name) {
+    // Filename validation
+    if (name == NULL) return ERR_INVALID_NAME;
+    int nameLen = strlen(name);
+    if (nameLen < 1 || nameLen > MAX_NAME_LEN) return ERR_INVALID_NAME;
+    
+    // TODO: Filename check for alphanumeric
+
+    return TFS_SUCCESS;
+}
+
+// Clears an entry in the open file table
+static void clearOpenFileEntry(fileDescriptor FD) {
+    openFileTable[FD].inUse = 0;
+    openFileTable[FD].inodeBlock = -1;
+    openFileTable[FD].filePointer = 0;
+    openFileTable[FD].name[0] = '\0';
+}
+
+// Builds a free block
+static void buildFreeBlock(char *freeBlock) {
+    memset(freeBlock, 0x00, BLOCKSIZE);
+    freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
+    freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+}
+
+// Reads inode block from file descriptor
+static int readInodeFromFD(fileDescriptor FD, char *inode, int *inodeBlock) {
+    *inodeBlock = openFileTable[FD].inodeBlock;
+    if (readBlock(currentMount, *inodeBlock, inode) < 0) return ERR_DISK_READ;
+
+    return TFS_SUCCESS;
+}
+
 // Scans bitmap in superblock and returns block number of first free block
 static int findFreeBlock() {
     char superblock[BLOCKSIZE];
@@ -55,7 +106,67 @@ static int setBitmapBit(int blockNum, int isFree) {
 
     // Update superblock with new bitmap
     if (writeBlock(currentMount, 0, superblock) < 0) return ERR_BLOCK_WRITE;
-    return 0;
+    return TFS_SUCCESS;
+}
+
+// Frees all file extent blocks in a chain
+static int freeExtentChain(int firstExtentBlock) {
+    int extentBlock = firstExtentBlock;
+
+    // Iterate through all file extents
+    while (extentBlock != 0) {
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
+
+        int nextExtent = (unsigned char)extent[FILE_EXTENT_NEXT];
+        
+        // Update bitmap
+        if (setBitmapBit(extentBlock, 1) < 0) return ERR_BLOCK_WRITE;
+
+        // Update disk as free block
+        char freeBlock[BLOCKSIZE];
+        buildFreeBlock(freeBlock);
+        if (writeBlock(currentMount, extentBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
+
+        extentBlock = nextExtent;
+    }
+
+    return TFS_SUCCESS;
+}
+
+// Finds extent block and byte offset from file offset
+static int findExtentForOffset(char *inode, int offset, int *extentBlock, int *byteInExtent) {
+    // Find block that fp points to
+    int extentIndex = offset / EXTENT_DATA_SIZE;
+    *byteInExtent = offset % EXTENT_DATA_SIZE;
+    
+    // Traverse through each block until target block
+    *extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
+    for (int i = 0; i < extentIndex; i++) {
+        if (*extentBlock == 0) return ERR_EOF;
+        char extent[BLOCKSIZE];
+        if (readBlock(currentMount, *extentBlock, extent) < 0) return ERR_DISK_READ;
+        *extentBlock = (unsigned char)extent[FILE_EXTENT_NEXT];
+    }
+
+    if (*extentBlock == 0) return ERR_EOF;
+    return TFS_SUCCESS;
+}
+
+// Helper: find inode block number by filename, returns -1 if not found
+static int findInodeByName(char *name) {
+    char superblock[BLOCKSIZE];
+    if (readBlock(currentMount, 0, superblock) < 0) return -1;
+    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
+
+    char block[BLOCKSIZE];
+    for (int i = 1; i < numBlocks; i++) {
+        if (readBlock(currentMount, i, block) < 0) continue;
+        if (block[BLOCK_TYPE_OFFSET] != INODE) continue;
+        if (block[MAGIC_NUM_OFFSET] != MAGIC_NUMBER) continue;
+        if (strcmp(&block[INODE_NAME_OFFSET], name) == 0) return i;
+    }
+    return -1;
 }
 
 int tfs_mkfs(char *filename, int nBytes) {
@@ -99,9 +210,7 @@ int tfs_mkfs(char *filename, int nBytes) {
 
     // Initialize rest of free blocks
     char freeBlock[BLOCKSIZE];
-    memset(freeBlock, 0x00, BLOCKSIZE);
-    freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
-    freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+    buildFreeBlock(freeBlock);
     // Skip superblock
     for (int i = 1; i < numBlocks; i++) {
         if (writeBlock(diskNum, i, freeBlock) < 0) return ERR_BLOCK_WRITE;
@@ -134,39 +243,35 @@ int tfs_mount(char *diskname) {
 
     // Set as new currently mounted disk
     currentMount = diskNum;
-    return 0;
+    return TFS_SUCCESS;
 }
 
 
 int tfs_unmount(void) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
 
     // Close open files
     for (int i = 0; i < MAX_FILES; i++) {
         if (openFileTable[i].inUse) {
-            openFileTable[i].inUse = 0;
-            openFileTable[i].inodeBlock = -1;
-            openFileTable[i].filePointer = 0;
+            clearOpenFileEntry(i);
         }
     }
 
     // Update mount state
     closeDisk(currentMount);
     currentMount = -1;
-    return 0;
+    return TFS_SUCCESS;
 }
 
 
 fileDescriptor tfs_openFile(char *name) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
     
-    // Filename validation
-    if (name == NULL) return ERR_INVALID_NAME;
-    int nameLen = strlen(name);
-    if (nameLen < 1 || nameLen > MAX_NAME_LEN) return ERR_INVALID_NAME;
-    
-    // TODO: Filename check for alphanumeric
+    status = validateName(name);
+    if (status < 0) return status;
 
     // If file is already open, return existing fd
     for (int i = 0; i < MAX_FILES; i++) {
@@ -253,58 +358,42 @@ fileDescriptor tfs_openFile(char *name) {
 
 int tfs_closeFile(fileDescriptor FD) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    // Making sure file descriptor in correct range
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    // Make sure file is actually in use
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
 
     // Clearing entry of provided file descriptor
-    openFileTable[FD].inUse = 0;
-    openFileTable[FD].inodeBlock = -1;
-    openFileTable[FD].filePointer = 0;
+    clearOpenFileEntry(FD);
     return TFS_SUCCESS;
 }
 
 
 int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    // Making sure file descriptor in correct range
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    // Make sure file is actually in use
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
+
     if (buffer == NULL) return ERR_INVALID_PARAM;
     if (size < 0) return ERR_INVALID_PARAM;
     
     // Read inode block
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
 
     // Check read only flag
     if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
 
     // Free any existing extent blocks before writing new data
     int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
-    while (extentBlock != 0) {
-        char extent[BLOCKSIZE];
-        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
- 
-        int nextExtent = (unsigned char)extent[FILE_EXTENT_NEXT];
-
-        // Update bitmap
-        if (setBitmapBit(extentBlock, 1) < 0) return ERR_BLOCK_WRITE;
-    
-        // Update disk as free block
-        char freeBlock[BLOCKSIZE];
-        memset(freeBlock, 0x00, BLOCKSIZE);
-        freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
-        freeBlock[MAGIC_NUM_OFFSET]  = MAGIC_NUMBER;
-        if (writeBlock(currentMount, extentBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
-
-        extentBlock = nextExtent;
-    }
+    status = freeExtentChain(extentBlock);
+    if (status < 0) return status;
 
     // Reset inode state
     inode[INODE_FIRST_EXTENT] = 0;
@@ -366,55 +455,34 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
 
 int tfs_deleteFile(fileDescriptor FD) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    // Making sure file descriptor in correct range
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    // Make sure file is actually in use
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
 
     // Read inode block
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
 
     // Check read-only flag
     if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
 
     // Get first file extent block
     int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
-    // Iterate through all file extents
-    while (extentBlock != 0) {
-        char extent[BLOCKSIZE];
-        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
-
-        int nextExtent = (unsigned char)extent[FILE_EXTENT_NEXT];
-        
-        // Update bitmap
-        if (setBitmapBit(extentBlock, 1) < 0) return ERR_BLOCK_WRITE;
-
-        // Update disk as free block
-        char freeBlock[BLOCKSIZE];
-        memset(freeBlock, 0x00, BLOCKSIZE);
-        freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
-        freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
-        if (writeBlock(currentMount, extentBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
-
-        extentBlock = nextExtent;
-    }
+    status = freeExtentChain(extentBlock);
+    if (status < 0) return status;
 
     // Free inode itself
     if (setBitmapBit(inodeBlock, 1) < 0) return ERR_BLOCK_WRITE;
     char freeBlock[BLOCKSIZE];
-    memset(freeBlock, 0x00, BLOCKSIZE);
-    freeBlock[BLOCK_TYPE_OFFSET] = FREE_BLOCK;
-    freeBlock[MAGIC_NUM_OFFSET] = MAGIC_NUMBER;
+    buildFreeBlock(freeBlock);
     if (writeBlock(currentMount, inodeBlock, freeBlock) < 0) return ERR_BLOCK_WRITE;
 
     // Update open file table
-    openFileTable[FD].inUse = 0;
-    openFileTable[FD].inodeBlock = -1;
-    openFileTable[FD].filePointer = 0;   
-    openFileTable[FD].name[0] = '\0';
+    clearOpenFileEntry(FD);
     
     return TFS_SUCCESS;
 }
@@ -422,18 +490,21 @@ int tfs_deleteFile(fileDescriptor FD) {
 
 int tfs_readByte(fileDescriptor FD, char *buffer) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;   
-    // Making sure file descriptor in correct range   
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    // Make sure file is actually in use
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
+
     // BUFFER ERROR CODE NEEDED
     if (buffer == NULL) return ERR_INVALID_PARAM;
 
     // Get file size from inode
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
+
     // Read file size as 4 bytes
     int fileSize;
     memcpy(&fileSize, &inode[INODE_SIZE_OFFSET], sizeof(int));
@@ -443,18 +514,10 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     // Check if fp is past EOF
     if (fp >= fileSize) return ERR_EOF;
 
-    // Find block that fp points to
-    int extentIndex = fp / EXTENT_DATA_SIZE;
-    int byteInExtent = fp % EXTENT_DATA_SIZE;
-    
-    // Traverse through each block until target block
-    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
-    for (int i = 0; i < extentIndex; i++) {
-        if (extentBlock == 0) return ERR_EOF;
-        char extent[BLOCKSIZE];
-        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
-        extentBlock = (unsigned char)extent[FILE_EXTENT_NEXT];
-    }
+    int extentBlock;
+    int byteInExtent;
+    status = findExtentForOffset(inode, fp, &extentBlock, &byteInExtent);
+    if (status < 0) return status;
 
     // Read the target extent and copy the byte to buffer
     char extent[BLOCKSIZE];
@@ -474,11 +537,12 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
 
 int tfs_seek(fileDescriptor FD, int offset) {
     // Making sure a file system exists first
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    // Making sure file descriptor in correct range
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    // Make sure file is actually in use
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
+
     // Offset can't be negative 
     if (offset < 0) return ERR_EOF;
 
@@ -491,7 +555,8 @@ int tfs_seek(fileDescriptor FD, int offset) {
 // Feature b: Directory listing and file renaming
 int tfs_readdir(void) {
     // Make sure a file system is mounted
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
 
     // Read superblock to get total blocks
     char superblock[BLOCKSIZE];
@@ -512,19 +577,22 @@ int tfs_readdir(void) {
 
 int tfs_rename(fileDescriptor FD, char *newName) {
     // Make sure a file system is mounted
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
+
     // Validate file descriptor
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    status = validateFD(FD);
+    if (status < 0) return status;
+
     // Validate new name
-    if (newName == NULL) return ERR_INVALID_NAME;
-    int nameLen = strlen(newName);
-    if (nameLen < 1 || nameLen > MAX_NAME_LEN) return ERR_INVALID_NAME;
+    status = validateName(newName);
+    if (status < 0) return status;
 
     // Read the inode block
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
 
     // Overwrite the name in the inode
     memset(&inode[INODE_NAME_OFFSET], 0x00, MAX_NAME_LEN + 1);
@@ -543,15 +611,18 @@ int tfs_rename(fileDescriptor FD, char *newName) {
 // Feature e: Timestamps
 int tfs_readFileInfo(fileDescriptor FD) {
     // Make sure a file system is mounted
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
+
     // Validate file descriptor
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    status = validateFD(FD);
+    if (status < 0) return status;
 
     // Read inode block
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
 
     // Extract timestamps from inode
     time_t creation, modification, access;
@@ -568,26 +639,13 @@ int tfs_readFileInfo(fileDescriptor FD) {
     return TFS_SUCCESS;
 }
 
-// Helper: find inode block number by filename, returns -1 if not found
-static int findInodeByName(char *name) {
-    char superblock[BLOCKSIZE];
-    if (readBlock(currentMount, 0, superblock) < 0) return -1;
-    int numBlocks = (unsigned char)superblock[SUPERBLOCK_NUM_BLOCKS_OFFSET];
-
-    char block[BLOCKSIZE];
-    for (int i = 1; i < numBlocks; i++) {
-        if (readBlock(currentMount, i, block) < 0) continue;
-        if (block[BLOCK_TYPE_OFFSET] != INODE) continue;
-        if (block[MAGIC_NUM_OFFSET] != MAGIC_NUMBER) continue;
-        if (strcmp(&block[INODE_NAME_OFFSET], name) == 0) return i;
-    }
-    return -1;
-}
-
 // Feature d: Read only and writeByte
 int tfs_makeRO(char *name) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    if (name == NULL) return ERR_INVALID_NAME;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateName(name);
+    if (status < 0) return status;
 
     int inodeBlock = findInodeByName(name);
     if (inodeBlock < 0) return ERR_FILE_NOT_FOUND;
@@ -602,8 +660,11 @@ int tfs_makeRO(char *name) {
 }
 
 int tfs_makeRW(char *name) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    if (name == NULL) return ERR_INVALID_NAME;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateName(name);
+    if (status < 0) return status;
 
     int inodeBlock = findInodeByName(name);
     if (inodeBlock < 0) return ERR_FILE_NOT_FOUND;
@@ -618,14 +679,17 @@ int tfs_makeRW(char *name) {
 }
 
 int tfs_writeByte(fileDescriptor FD, unsigned int data) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
-    if (FD < 0 || FD >= MAX_FILES) return ERR_FILE_NOT_FOUND;
-    if (!openFileTable[FD].inUse) return ERR_FILE_NOT_FOUND;
+    int status = validateMounted();
+    if (status < 0) return status;
+
+    status = validateFD(FD);
+    if (status < 0) return status;
 
     // Read inode
     char inode[BLOCKSIZE];
-    int inodeBlock = openFileTable[FD].inodeBlock;
-    if (readBlock(currentMount, inodeBlock, inode) < 0) return ERR_DISK_READ;
+    int inodeBlock;
+    status = readInodeFromFD(FD, inode, &inodeBlock);
+    if (status < 0) return status;
 
     // Check readonly flag
     if (inode[INODE_RO_FLAG] == 1) return ERR_FILE_READ_ONLY;
@@ -638,16 +702,10 @@ int tfs_writeByte(fileDescriptor FD, unsigned int data) {
     if (fp >= fileSize) return ERR_EOF;
 
     // Find the correct extent block (same traversal as readByte)
-    int extentIndex = fp / EXTENT_DATA_SIZE;
-    int byteInExtent = fp % EXTENT_DATA_SIZE;
-
-    int extentBlock = (unsigned char)inode[INODE_FIRST_EXTENT];
-    for (int i = 0; i < extentIndex; i++) {
-        if (extentBlock == 0) return ERR_EOF;
-        char extent[BLOCKSIZE];
-        if (readBlock(currentMount, extentBlock, extent) < 0) return ERR_DISK_READ;
-        extentBlock = (unsigned char)extent[FILE_EXTENT_NEXT];
-    }
+    int extentBlock;
+    int byteInExtent;
+    status = findExtentForOffset(inode, fp, &extentBlock, &byteInExtent);
+    if (status < 0) return status;
 
     // Read extent, overwrite the byte, write back
     char extent[BLOCKSIZE];
@@ -667,7 +725,8 @@ int tfs_writeByte(fileDescriptor FD, unsigned int data) {
 
 // Feature a: Fragmentation info and defragmentation
 int tfs_displayFragments(void) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
 
     char superblock[BLOCKSIZE];
     if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
@@ -693,7 +752,8 @@ int tfs_displayFragments(void) {
 }
 
 int tfs_defrag(void) {
-    if (currentMount == -1) return ERR_DISK_NOT_MOUNTED;
+    int status = validateMounted();
+    if (status < 0) return status;
 
     char superblock[BLOCKSIZE];
     if (readBlock(currentMount, 0, superblock) < 0) return ERR_DISK_READ;
